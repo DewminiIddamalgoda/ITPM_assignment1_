@@ -33,6 +33,7 @@ with sync_playwright() as p:
         action_locator = page.get_by_role("button", name="Transliterate").first
         
         # Test each input
+        previous_output = ""
         for row_num, input_text in inputs:
             print(f"Testing Row {row_num}: {input_text}")
             
@@ -43,24 +44,67 @@ with sync_playwright() as p:
                 page.keyboard.press("Backspace")
                 input_locator.fill(input_text)
                 
+                # Small delay to ensure input is registered
+                page.wait_for_timeout(500)
+                
                 # Click transliterate button
                 action_locator.click()
                 
-                # Wait for output
-                page.wait_for_timeout(3000)
+                # Additional delay after clicking
+                page.wait_for_timeout(1000)
                 
-                # Get output
-                try:
-                    actual_output = output_locator.input_value()
-                    if not actual_output:
-                        actual_output = output_locator.inner_text()
-                    if not actual_output:
-                        actual_output = output_locator.text_content()
+                # Wait for the output to be populated and different from previous
+                max_attempts = 5
+                actual_output = ""
+                
+                for attempt in range(max_attempts):
+                    # Wait for output to be populated
+                    try:
+                        page.wait_for_function(
+                            """() => {
+                                const outputElement = document.querySelector('textarea[placeholder*="Sinhala"]');
+                                if (!outputElement) return false;
+                                const value = outputElement.value || outputElement.innerText || outputElement.textContent;
+                                return value && value.trim() !== '';
+                            }""",
+                            timeout=8000
+                        )
+                    except:
+                        print(f"  -> Timeout waiting for output on attempt {attempt + 1}")
+                        continue
                     
-                    actual_output = str(actual_output).strip() if actual_output else ""
+                    # Wait a bit more for stability
+                    page.wait_for_timeout(1500)
                     
-                except:
-                    actual_output = ""
+                    # Get current output
+                    try:
+                        current_output = output_locator.input_value()
+                        if not current_output:
+                            current_output = output_locator.inner_text()
+                        if not current_output:
+                            current_output = output_locator.text_content()
+                        
+                        current_output = str(current_output).strip() if current_output else ""
+                        
+                        # Check if this is a new output (different from previous)
+                        if current_output and current_output != previous_output:
+                            actual_output = current_output
+                            break
+                        elif current_output and attempt == max_attempts - 1:
+                            # Last attempt, use whatever we got
+                            actual_output = current_output
+                            break
+                        else:
+                            # Wait and try again
+                            page.wait_for_timeout(2000)
+                            
+                    except Exception as e:
+                        print(f"  -> Error getting output on attempt {attempt + 1}: {e}")
+                        page.wait_for_timeout(2000)
+                        continue
+                
+                # Update previous output for next iteration
+                previous_output = actual_output
                 
                 # Get expected output from Excel
                 expected_output = ws.cell(row=row_num, column=4).value
